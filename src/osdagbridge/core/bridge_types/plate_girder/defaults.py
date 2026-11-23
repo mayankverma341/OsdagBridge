@@ -179,7 +179,8 @@ def _update_typical_section_defaults(input_dict: dict) -> None:
     )
 
     def _update(key, value):
-        input_dict.update({key: value})
+        if input_dict.get(key) is None:
+            input_dict[key] = value
 
     # --- Deck Detail sub-tab ---
     _update(KEY_TS_DECK_THICKNESS,     250.0)                        # mm
@@ -211,6 +212,8 @@ def _update_typical_section_defaults(input_dict: dict) -> None:
     )
     include_median = str(input_dict.get(KEY_INCLUDE_MEDIAN, 'No')).strip().lower()
     if include_median == 'yes':
+        if input_dict.get(KEY_MD_TYPE) is None:
+            input_dict.pop(KEY_MD_WIDTH, None)
         _md_geom = IRC5_2015.cl_109_6_3_shapes(
             barrier_type=KEY_MEDIAN_TYPE[1],
             footpath=None,
@@ -230,13 +233,9 @@ def _update_typical_section_defaults(input_dict: dict) -> None:
         _update(KEY_MD_LOAD,         _md_load)                      # kN/m
         _update(KEY_MD_POST_SPACING, 2)                             # m
     else:
-        _update(KEY_MD_TYPE,         None)
-        _update(KEY_MD_DENSITY,      None)
-        _update(KEY_MD_WIDTH,        0.0)
-        _update(KEY_MD_HEIGHT,       None)
-        _update(KEY_MD_AREA,         None)
-        _update(KEY_MD_LOAD,         None)
-        _update(KEY_MD_POST_SPACING, None)
+        input_dict.update({KEY_MD_TYPE: None, KEY_MD_DENSITY: None, KEY_MD_WIDTH: 0.0,
+                           KEY_MD_HEIGHT: None, KEY_MD_AREA: None, KEY_MD_LOAD: None,
+                           KEY_MD_POST_SPACING: None})
 
     # --- Railing sub-tab ---
     from osdagbridge.core.bridge_components.super_structure.railing.geometry import (
@@ -261,7 +260,8 @@ def _update_loading_tab_defaults(input_dict: dict) -> None:
     """Fill Loading tab keys that are None with schema defaults."""
 
     def _update(key, value):
-        input_dict[key] = value
+        if input_dict.get(key) is None:
+            input_dict[key] = value
 
     # ── Permanent Load ─────────────────────────────────────────────────────
     _update(KEY_PL_SELF_WEIGHT_FACTOR,      "1.00")
@@ -328,7 +328,8 @@ def _update_support_conditions_defaults(input_dict: dict) -> None:
     """Fill Support Conditions tab keys that are None with schema defaults."""
     
     def _update(key, value):
-        input_dict.update({key: value})
+        if input_dict.get(key) is None:
+            input_dict[key] = value
 
     _update(KEY_SC_LEFT_SUPPORT,   "Pinned")
     _update(KEY_SC_RIGHT_SUPPORT,  "Roller")
@@ -338,7 +339,8 @@ def _update_design_options_defaults(input_dict: dict) -> None:
     """Fill Design Options tab keys that are None with schema defaults."""
     
     def _update(key, value):
-        input_dict.update({key: value})
+        if input_dict.get(key) is None:
+            input_dict[key] = value
 
     _update(KEY_DS_CONSTRUCTION_STAGE,      "Yes")
     _update(KEY_DS_REINF_BOUNDS,            {
@@ -360,8 +362,8 @@ def _update_design_options_cont_defaults(input_dict: dict) -> None:
     """Fill Design Options (Cont.) tab keys that are None with schema defaults."""
 
     def _update(key, value):
-        # Update dict (solves some osi values not being loaded)
-        input_dict[key] = value
+        if input_dict.get(key) is None:
+            input_dict[key] = value
 
     _update(KEY_DO_GAMMA_C_BASIC,      "1.50")
     _update(KEY_DO_GAMMA_C_ACCIDENTAL, "1.20")
@@ -867,8 +869,10 @@ def seed_no_of_girders(overall_width: float) -> int:
         raise ValueError("Overall bridge width must be positive.")
     return max(2, ceil(overall_width / DEFAULT_GIRDER_SPACING))
 
-def solve_extend_basic_input_dict(basic_input_dict: dict) -> None:
-    """Parse basic inputs and solve bridge layout. Updates basic_input_dict in-place."""
+def solve_extend_basic_input_dict(basic_input_dict: dict, changed_field: str = "girders",
+                                  girder_spacing: float | None = None,
+                                  deck_overhang: float | None = None) -> None:
+    """Update the layout in place using the edited field as the starting value."""
     from .initial_sizing import BridgeConfigurationSolver
 
     def _railing_width_m(value) -> float:
@@ -896,11 +900,11 @@ def solve_extend_basic_input_dict(basic_input_dict: dict) -> None:
     elif 'Both' in footpath_str:
         n_footpaths    = 2
         footpath_width = float(basic_input_dict.get(KEY_TS_FOOTPATH_WIDTH))
-        railing_width  = _railing_width_m(basic_input_dict.get(KEY_RL_WIDTH))
+        railing_width  = _railing_width_m(basic_input_dict.get(KEY_RL_WIDTH)) or DEFAULT_RAILING_WIDTH
     else:
         n_footpaths    = 1
         footpath_width = float(basic_input_dict.get(KEY_TS_FOOTPATH_WIDTH))
-        railing_width  = _railing_width_m(basic_input_dict.get(KEY_RL_WIDTH))
+        railing_width  = _railing_width_m(basic_input_dict.get(KEY_RL_WIDTH)) or DEFAULT_RAILING_WIDTH
 
     median_width  = basic_input_dict.get(KEY_MD_WIDTH) or 0.0
 
@@ -916,7 +920,21 @@ def solve_extend_basic_input_dict(basic_input_dict: dict) -> None:
         basic_input_dict.get(KEY_TS_NO_OF_GIRDERS)
         or seed_no_of_girders(solver.calculate_overall_bridge_width())
     )
-    sizing_result = solver._solve_layout(no_of_girders=no_of_girders, changed_field='girders')
+    def _layout_value(value, key):
+        if value is not None:
+            return float(value)
+        raw = basic_input_dict.get(key)
+        try:
+            return float(raw) if raw not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    sizing_result = solver._solve_layout(
+        no_of_girders=no_of_girders,
+        girder_spacing=_layout_value(girder_spacing, KEY_TS_GIRDER_SPACING),
+        deck_overhang=_layout_value(deck_overhang, KEY_TS_DECK_OVERHANG),
+        changed_field=changed_field,
+    )
 
     print("[DEBUG] Bridge Layout Sizing Result:")
     print(f"  overall_width = {sizing_result.overall_width} m")

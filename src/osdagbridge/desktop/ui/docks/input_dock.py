@@ -856,7 +856,9 @@ class InputDock(QWidget):
         self.is_locked = not self.is_locked
 
         # Update Additional Input State (Lock/Unlock)
-        self.parent._additional_inputs_dialog.lock(lock=self.is_locked)
+        if self.parent._additional_inputs_dialog is not None:
+            self.parent._additional_inputs_dialog.lock(lock=self.is_locked)
+        self.parent.cad_comp_widget.set_editing_enabled(not self.is_locked)
 
         if not self.is_locked:
             # Clear 3D-Cad
@@ -1044,6 +1046,18 @@ class InputDock(QWidget):
             
         else:
             print("[ERROR]: template_page.input_dictionary Not Found")
+
+    def apply_external_value(self, key: str, value) -> None:
+        """Reflect a value edited on the 2D CAD without re-emitting input_value_changed."""
+        widget = self._w(key)
+        if widget is None:
+            return
+        widget.blockSignals(True)
+        if isinstance(widget, QLineEdit):
+            widget.setText(f"{value:g}")
+        elif isinstance(widget, QComboBox):
+            widget.setCurrentText(str(value))
+        widget.blockSignals(False)
 
     def populate_from_dict(self, data: dict) -> None:
         """

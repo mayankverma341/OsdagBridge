@@ -8,7 +8,12 @@ import matplotlib.colors as mcolors
 from matplotlib.ticker import FuncFormatter
 from matplotlib.ticker import MaxNLocator
 import numpy as np
-import openseespy.opensees as ops
+from osdagbridge.core.utils.common import VALUE_TRANSVERSE_MEMBERS
+from osdagbridge.core.bridge_types.plate_girder.results_data import (
+    _build_nodes_members,
+    transverse_series,
+    classify_members,
+)
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 from mpl_toolkits.mplot3d import proj3d
 from matplotlib.text import Annotation
@@ -91,29 +96,24 @@ def _set_value_axis_tick_formatter(ax, eng_scale, value_sign: float = 1.0, use_a
 # =============================================================================
 
 def build_nodes_members():
-    """Build nodes and members dicts from the active openseespy model."""
-    nodes = {
-        int(n): list(map(float, ops.nodeCoord(n)))
-        for n in ops.getNodeTags()
-    }
-    members = {
-        int(e): list(map(int, ops.eleNodes(e)))
-        for e in ops.getEleTags()
-    }
-    return nodes, members
+    return _build_nodes_members()
 
 
 def _find_girders(nodes, members, z_tol=3):
     """
     Return an OrderedDict  { z_value: [elem_tag, ...] }
-    containing only longitudinal elements (both end-nodes share the same z).
+    containing only longitudinal elements, classified by results_data.
     Elements within each girder are sorted by their i-node x-coordinate.
     """
+    longitudinal = classify_members(nodes, members)["longitudinal"]
     node_z = {n: round(coord[2], z_tol) for n, coord in nodes.items()}
 
     girders = defaultdict(list)
-    for ele, (n1, n2) in members.items():
-        if node_z[n1] == node_z[n2]:
+    for ele in longitudinal:
+        if ele not in members:
+            continue
+        n1, n2 = members[ele]
+        if n1 in node_z and n2 in node_z and node_z[n1] == node_z[n2]:
             girders[node_z[n1]].append(ele)
 
     # sort elements within each girder by x of i-node
@@ -157,6 +157,99 @@ def _build_polyline(elems, members, nodes, force_i, force_j, ds):
     node_ids.append(n2)
 
     return np.array(xs), np.array(ys), np.array(zs), np.array(vals), node_ids
+
+
+def build_figure_transverse(ds, key, nodes, members, edge_dist=0.0, eng_scale=1.0):
+    v_scale = _value_plot_scale(eng_scale)
+    is_disp = key in DISP_MAP
+    if is_disp:
+        components = (DISP_MAP[key][-1],)
+        quantity = DISP_DISPLAY[key]
+        unit = 'mm'
+        axes = 'global'
+    else:
+        components = FORCE_MAP[key]
+        quantity = FORCE_DISPLAY[key]
+        unit = 'kNm' if key in ('Mx', 'My', 'Mz') else 'kN'
+        axes = 'local' if 'transverse_local_forces' in ds else 'global'
+    axis_label = f"{quantity} ({unit}, {axes} axes)"
+    title = f"{VALUE_TRANSVERSE_MEMBERS} — {axis_label}"
+
+    fig = Figure(figsize=(14, 6), dpi=110, facecolor="white")
+    ax = fig.add_subplot(111, projection="3d", facecolor="white")
+
+    all_xs = [coord[0] for coord in nodes.values()]
+    all_zs = [coord[2] for coord in nodes.values()]
+    x_min, x_max = min(all_xs), max(all_xs)
+    y_min, y_max = min(all_zs), max(all_zs)
+    x_range = (x_max - x_min) or 1.0
+    y_range = (y_max - y_min) or 1.0
+    x_pad = x_range * 0.05
+    y_pad = y_range * 0.05
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+    _add_grillage_background(
+        ax, nodes, members,
+        show_transverse=True,
+        include_edge_longitudinals=True,
+        include_end_transverse=True,
+        show_inner_nodes=False,
+    )
+
+    summary_data = {}
+    global_vmin = 0.0
+    global_vmax = 0.0
+    color = "#6A1B9A" if is_disp else "#1565C0"
+    fill = "#CE93D8" if is_disp else "#90CAF9"
+
+    for label, coordinates, values in transverse_series(
+        ds, nodes, members, components, displacement=is_disp,
+    ):
+        xs, _, zs = coordinates.T
+        scaled = values * v_scale
+        ax.plot_surface(
+            np.vstack([xs, xs]), np.vstack([zs, zs]),
+            np.vstack([np.zeros_like(scaled), scaled]),
+            color=fill, alpha=0.25, linewidth=0, antialiased=False, zorder=2,
+        )
+        ax.plot(xs, zs, scaled, color=color, linewidth=2.0, zorder=4)
+        ax.scatter(xs, zs, scaled, color=color, s=22, zorder=5, depthshade=False)
+        first = np.flatnonzero(np.isfinite(values))[0]
+        ax.text(xs[first], zs[first], scaled[first], label, color="black",
+                fontsize=10, fontweight="bold", zorder=10)
+        summary_data[label] = {"max": float(np.nanmax(values)), "min": float(np.nanmin(values))}
+        global_vmin = min(global_vmin, float(np.nanmin(scaled)))
+        global_vmax = max(global_vmax, float(np.nanmax(scaled)))
+        ax.plot(xs, zs, np.zeros_like(zs), color="#388E3C",
+                linewidth=1.0, alpha=0.5, zorder=3)
+
+    if not summary_data:
+        ax.text2D(0.5, 0.5, "No transverse results for this selection",
+                  transform=ax.transAxes, ha="center")
+
+    zmin = min(0.0, global_vmin)
+    zmax = max(0.0, global_vmax)
+    z_span = max(1e-9, zmax - zmin)
+    pad = max(1e-6, 0.05 * z_span)
+    ax.set_zlim(zmin - pad, zmax + pad)
+    ax.set_box_aspect([x_range, y_range, max(1.0, (x_range + y_range) * 0.15)])
+    ax.set_xlabel("Span Length (m)", fontsize=10, labelpad=8)
+    ax.set_ylabel("Bridge Width (m)", fontsize=10, labelpad=8)
+    ax.set_zlabel(axis_label, fontsize=10, labelpad=8)
+    _set_value_axis_tick_formatter(ax, v_scale)
+    ax.set_title(title, fontsize=12, fontweight="bold", pad=12)
+    _add_element_number_labels(ax, nodes, members)
+    ax.view_init(elev=DEFAULT_ELEV, azim=DEFAULT_AZIM)
+    for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
+        pane.fill = False
+        pane.set_edgecolor("#555555")
+    ax.grid(True, linestyle="--", linewidth=0.4, alpha=0.5)
+    _add_coordinate_triad(ax, nodes, eng_scale=v_scale)
+    ax.set_axis_off()
+    fig._eng_scale = v_scale
+
+    return fig, summary_data
 
 
 # =============================================================================
@@ -375,7 +468,7 @@ def _add_coordinate_triad(ax, nodes, scale=0.12, eng_scale: float = 1.0):
     ax.set_zlim(zlim)
     
 def _get_bg_nodes_members(nodes, members, edge_dist, selected_girder, girder_items):
-    if selected_girder == "All":
+    if selected_girder in ("All", VALUE_TRANSVERSE_MEMBERS):
         return nodes, members
     filtered_nodes = {}
     filtered_members = {}
@@ -402,7 +495,7 @@ def _add_supports(ax, nodes, members, edge_dist=0.0, selected_girder="All"):
         if not elems: continue
         
         girder_name = f"G{i}" if edge_dist > 0 else f"G{i + 1}"
-        if selected_girder != "All" and girder_name != selected_girder:
+        if selected_girder not in ("All", VALUE_TRANSVERSE_MEMBERS) and girder_name != selected_girder:
             continue
 
         # Skip placing supports on edge beams if an overhang exists!
@@ -552,7 +645,7 @@ def build_figure_grillage(nodes, members, edge_dist=0.0, selected_girder="All"):
         is_edge_beam = edge_dist > 0 and (i == 0 or i == n_girders - 1)
         girder_name  = f"G{i}" if edge_dist > 0 else f"G{i + 1}"
 
-        if selected_girder != "All" and girder_name != selected_girder:
+        if selected_girder not in ("All", VALUE_TRANSVERSE_MEMBERS) and girder_name != selected_girder:
             continue
 
         n_first = members[elems[0]][0]
@@ -654,6 +747,10 @@ def build_figure_sfd(ds, force_key, nodes, members, edge_dist=0.0, eng_scale=1.0
     """
     Build a 3-D matplotlib figure showing the Shear Force Diagram.
     """
+    if selected_girder == VALUE_TRANSVERSE_MEMBERS:
+        return build_figure_transverse(
+            ds, force_key, nodes, members, edge_dist=edge_dist, eng_scale=eng_scale
+        )
     v_scale = _value_plot_scale(eng_scale)
     comp_i_name, comp_j_name = FORCE_MAP[force_key]
     disp_key = FORCE_DISPLAY.get(force_key, force_key)
@@ -710,7 +807,7 @@ def build_figure_sfd(ds, force_key, nodes, members, edge_dist=0.0, eng_scale=1.0
         is_edge_beam = edge_dist > 0 and (i == 0 or i == n_girders - 1)
         girder_name  = f"G{i}" if edge_dist > 0 else f"G{i + 1}"
 
-        if selected_girder != "All" and girder_name != selected_girder:
+        if selected_girder not in ("All", VALUE_TRANSVERSE_MEMBERS) and girder_name != selected_girder:
             continue
 
         xs, ys, zs, Vy, node_ids = _build_polyline(
@@ -917,6 +1014,10 @@ def build_figure_bmd(ds, force_key, nodes, members, edge_dist=0.0, eng_scale=1.0
     fig          : matplotlib.figure.Figure
     summary_data : dict  — {girder_name: {"max": float, "min": float}}
     """
+    if selected_girder == VALUE_TRANSVERSE_MEMBERS:
+        return build_figure_transverse(
+            ds, force_key, nodes, members, edge_dist=edge_dist, eng_scale=eng_scale
+        )
     v_scale = _value_plot_scale(eng_scale)
     comp_i_name, comp_j_name = FORCE_MAP[force_key]
     disp_key = FORCE_DISPLAY.get(force_key, force_key)
@@ -961,7 +1062,7 @@ def build_figure_bmd(ds, force_key, nodes, members, edge_dist=0.0, eng_scale=1.0
         is_edge_beam = edge_dist > 0 and (i == 0 or i == n_girders_bmd - 1)
         girder_name  = f"G{i}" if edge_dist > 0 else f"G{i + 1}"
 
-        if selected_girder != "All" and girder_name != selected_girder:
+        if selected_girder not in ("All", VALUE_TRANSVERSE_MEMBERS) and girder_name != selected_girder:
             continue
 
         xs, ys, zs, Mz, node_ids = _build_polyline(
@@ -1291,6 +1392,10 @@ def build_figure_deflection(ds, disp_key, nodes, members, edge_dist=0.0, eng_sca
     """
     Build a 3-D matplotlib figure showing the Deflection Diagram.
     """
+    if selected_girder == VALUE_TRANSVERSE_MEMBERS:
+        return build_figure_transverse(
+            ds, disp_key, nodes, members, edge_dist=edge_dist, eng_scale=eng_scale
+        )
     v_scale = _value_plot_scale(eng_scale)
     comp_name  = DISP_MAP[disp_key]
     disp_label = DISP_DISPLAY.get(disp_key, disp_key)
@@ -1379,7 +1484,7 @@ def build_figure_deflection(ds, disp_key, nodes, members, edge_dist=0.0, eng_sca
         is_edge_beam = edge_dist > 0 and (i == 0 or i == n_girders - 1)
         girder_name  = f"G{i}" if edge_dist > 0 else f"G{i + 1}"
 
-        if selected_girder != "All" and girder_name != selected_girder:
+        if selected_girder not in ("All", VALUE_TRANSVERSE_MEMBERS) and girder_name != selected_girder:
             continue
 
         node_list = [members[e][0] for e in elems] + [members[elems[-1]][1]]

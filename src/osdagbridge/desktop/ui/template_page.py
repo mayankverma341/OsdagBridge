@@ -1,4 +1,6 @@
 import os, yaml
+from copy import deepcopy
+from math import isfinite
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QMenuBar, QSplitter, QSizePolicy, QPushButton, QLineEdit, QComboBox, QFileDialog,
@@ -347,6 +349,9 @@ class CustomWindow(QWidget):
 
         # CAD widget
         self.cad_comp_widget = BridgeDualCADWidget(self)
+        self.cad_comp_widget.cad_parameter_edit_requested.connect(
+            self._on_cad_parameter_edit
+        )
         self.cad_comp_widget.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Expanding
         )
@@ -485,7 +490,7 @@ class CustomWindow(QWidget):
         if self.input_dock:
             print(f"\n@@ Syncing design mode to Additional Inputs: {self.input_dock._current_design_mode}")
             dlg.design_mode_trigger(self.input_dock._current_design_mode)
-
+        dlg.mark_clean()
 
         dlg.show()
         dlg.raise_()
@@ -881,6 +886,64 @@ class CustomWindow(QWidget):
                 text=f"Could not load OSI file:\n{e}",
                 dialogType=MessageBoxType.Warning
             ).exec()
+
+    def _on_cad_parameter_edit(self, input_key: str, value: float):
+        if self.input_dock.is_locked or getattr(self, '_design_running', False):
+            return
+        basic_keys = (KEY_CARRIAGEWAY_WIDTH, KEY_SPAN)
+        if input_key not in (*basic_keys, KEY_TS_GIRDER_SPACING, KEY_TS_DECK_THICKNESS):
+            return
+
+        candidate = deepcopy(self.input_dict)
+        candidate[input_key] = value
+        validator = self.input_dock.validator
+        editing_spacing = input_key == KEY_TS_GIRDER_SPACING
+        try:
+            if not isfinite(value) or value <= 0:
+                raise ValueError("Enter a positive numeric value.")
+            if editing_spacing:
+                solve_extend_basic_input_dict(candidate, changed_field="spacing")
+
+            if input_key in basic_keys:
+                error = validator.validate_basic_inputs(input_key, candidate)
+            else:
+                error = validator.validate_additional_inputs(input_key, candidate)
+            if error:
+                raise ValueError(error[1])
+
+            layout_changed = input_key == KEY_CARRIAGEWAY_WIDTH or self.input_dock.is_require_field_changed
+            if not editing_spacing and layout_changed:
+                solve_extend_basic_input_dict(candidate)
+            elif input_key == KEY_SPAN:
+                solve_extend_basic_input_dict(candidate, changed_field="spacing")
+
+            if input_key == KEY_SPAN:
+                for key, segments in candidate.items():
+                    if not key.startswith(f'{KEY_MP_GD_SEGMENT_TABLE}.') or not segments:
+                        continue
+                    last_segment = segments[-1]
+                    if float(last_segment['start']) >= value:
+                        raise ValueError("Span length must extend past the start of the last girder segment.")
+                    last_segment['end'] = value
+                count = int(float(candidate.get(KEY_MP_CB_NO_OF_CROSS_BRACINGS) or 1))
+                candidate[KEY_MP_CB_SPACING] = round(value / (count + 1), 3)
+        except (ValueError, TypeError) as exc:
+            CustomMessageBox(
+                title="Invalid CAD input",
+                text=str(exc),
+                buttons=["OK"],
+                dialogType=MessageBoxType.Warning,
+            ).exec()
+            return
+
+        self.input_dict.clear()
+        self.input_dict.update(candidate)
+        self.input_dock.is_require_field_changed = False
+        self.input_dock.apply_external_value(input_key, candidate[input_key])
+        if self._additional_inputs_dialog is not None:
+            self._additional_inputs_dialog.set_input_dictionary(self.input_dict)
+            self._additional_inputs_dialog._update_additional_input_cad()
+        self.cad_comp_widget.update_from_osdag_inputs(self.input_dict, force=True)
 
     def update_cad_from_inputs(self):
         """

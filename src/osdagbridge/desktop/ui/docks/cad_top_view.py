@@ -6,9 +6,10 @@ Author: Arushi
 from osdagbridge.core.utils.common import *
 import math
 from PySide6.QtWidgets import QWidget, QPushButton, QScrollArea
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSize
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSize, Signal
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QBrush, QPolygonF, QIcon
 from .cad_cross_section import CrossSectionCADWidget
+from osdagbridge.desktop.ui.utils.cad_inline_editor import CadInlineEditor, label_rect
 
 # ---- CAD Grey Palette ----
 CAD_DARK_GREY   = QColor(90, 90, 90)
@@ -27,7 +28,9 @@ LEADER_TEXT_OFFSET = 25    # leader label distance
 
 class TopViewCADWidget(QWidget):
     """Widget for drawing bridge top view"""
-    
+
+    cad_parameter_edit_requested = Signal(str, float)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.show_dimensions = True
@@ -68,7 +71,11 @@ class TopViewCADWidget(QWidget):
             'median_present': False,
             KEY_MD_WIDTH: 1200,
         }
-        
+
+        self._cad_inline_editor = CadInlineEditor(
+            self, self.cad_parameter_edit_requested.emit
+        )
+
         # girder dimensions (mm)
         self.girder = {
             'depth': 500,
@@ -477,9 +484,16 @@ class TopViewCADWidget(QWidget):
             self.hovered_top_view_element = new_hovered
             self.update()
 
+    def mouseDoubleClickEvent(self, event):
+        if self._cad_inline_editor.handle_double_click(event):
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def paintEvent(self, event):
         # clear hover zones at start of each paint
         self.top_view_hover_zones = []
+        self._cad_inline_editor.clear_regions()
         
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -1299,7 +1313,8 @@ class TopViewCADWidget(QWidget):
         
         self.draw_dimension_arrow_with_extensions_up(
             painter, x1_span, dim_y2, x2_span, dim_y2,
-            label_span, last_girder_y
+            label_span, last_girder_y,
+            edit_key=KEY_CAD_EDIT_SPAN_LENGTH
         )
 
         # GIRDER SPACING dimension (always visible)
@@ -1335,6 +1350,10 @@ class TopViewCADWidget(QWidget):
                 label_text,
                 QColor(255, 255, 255, 240),
                 QColor(0, 0, 0), 9, False
+            )
+            self._cad_inline_editor.register(
+                KEY_CAD_EDIT_GIRDER_SPACING,
+                label_rect(painter, label_x, label_y, label_text, 9)
             )
 
         # CL OF BEARING labels - ALWAYS VISIBLE (moved outside hover condition)
@@ -1410,7 +1429,8 @@ class TopViewCADWidget(QWidget):
             self.draw_clean_leader_line(painter, target_x, target_y, label_x, label_y,
                                     "End Diaphragm", CAD_DARK_GREY, QColor(139, 69, 19))
 
-    def draw_dimension_arrow_with_extensions_up(self, painter, x1, y1, x2, y2, text, girder_y):
+    def draw_dimension_arrow_with_extensions_up(self, painter, x1, y1, x2, y2, text, girder_y,
+                                                edit_key=None):
         """Dimension line with arrows and extension lines going UP to girder level (dimension below)"""
         painter.setPen(QPen(QColor(0, 0, 0), 1.0))
         
@@ -1463,6 +1483,9 @@ class TopViewCADWidget(QWidget):
         
         self.draw_text_with_background(painter, text_x - text_width/2, text_y, text, 
                                     QColor(255, 255, 255, 240), QColor(0, 0, 0), 9, False)
+        self._cad_inline_editor.register(
+            edit_key, label_rect(painter, text_x - text_width / 2, text_y, text, 9)
+        )
 
 
     def draw_skewed_dimension_arrow(self, painter, x1, y1, x2, y2, text, skew_rad):

@@ -1227,6 +1227,7 @@ class UIBuilder(QWidget):
                 _h.setStretch(1, 1)
 
         mode_combo.currentTextChanged.connect(_on_mode_changed)
+        mode_combo.sync_value_visibility = _on_mode_changed
 
         if on_change and hasattr(owner, on_change):
             mode_combo.currentTextChanged.connect(getattr(owner, on_change))

@@ -31,15 +31,16 @@ from .plot_generator import (
     # build_figure_bmd_contour,  # commented out
     build_figure_deflection,
     build_figure_grillage,
-    build_nodes_members,
     figure_to_bytes,
 )
+from .results_data import attach_transverse_forces, plot_geometry
 from osdagbridge.core.utils.codes.irc6_2017 import IRC6_2017
 from osdagbridge.core.utils.common import (
     KEY_STRUCTURE_TYPE,
     KEY_PROJECT_LOCATION,
     KEY_SPAN,
     KEY_CARRIAGEWAY_WIDTH,
+    KEY_CB_WIDTH,
     KEY_INCLUDE_MEDIAN,
     KEY_FOOTPATH,
     KEY_TS_FOOTPATH_WIDTH,
@@ -1016,7 +1017,7 @@ class PlateGirderBridge:
 
         self.deck_layout = DeckLayoutProperties(
             carriageway_width=float(inp[KEY_CARRIAGEWAY_WIDTH]),
-            crash_barrier_width=float(DEFAULT_CRASH_BARRIER_WIDTH),
+            crash_barrier_width=self._to_float(KEY_CB_WIDTH, DEFAULT_CRASH_BARRIER_WIDTH),
             footpath_width=float(inp[KEY_TS_FOOTPATH_WIDTH]),
             railing_width=float(inp[KEY_RL_WIDTH]),
             median_width=float(inp[KEY_MD_WIDTH]),
@@ -2131,6 +2132,7 @@ class PlateGirderBridge:
         if len(unique_idx) < len(lc_vals):
             ds = ds.isel(Loadcase=unique_idx)
 
+        attach_transverse_forces(ds, m)
         self.grillage_model._deduplicated_results = ds
         return ds
 
@@ -3225,7 +3227,9 @@ class PlateGirderBridge:
         cached = getattr(self.grillage_model, '_deduplicated_results', None)
         if cached is not None:
             return cached
-        return self.grillage_model.model.get_results()
+        model = self.grillage_model.model
+        dataset = model.get_results()
+        return attach_transverse_forces(dataset, model) if dataset is not None else None
     
     def get_results(self) -> dict:
         """Return the dictionary of design check outputs and results."""
@@ -3907,8 +3911,8 @@ class PlateGirderBridge:
         }
 
     def get_nodes_members(self) -> tuple[dict, dict]:
-        """Return (nodes, members) dicts built from the active openseespy model."""
-        return build_nodes_members()
+        """Return the node coordinates and connectivity used by the result dataset."""
+        return plot_geometry(self.get_results_dataset())
 
     def get_edge_dist(self) -> float:
         """Return the deck overhang distance (0.0 when no overhang)."""

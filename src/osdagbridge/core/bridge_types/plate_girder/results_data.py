@@ -16,7 +16,9 @@ from pathlib import Path
 
 import openseespy.opensees as ops
 
-from .results_data_post_processing import post_process, FORCE_KEEP, DISP_KEEP
+from .results_data_post_processing import (
+    post_process, FORCE_KEEP, DISP_KEEP,
+)
 
 
 class LazyLoadcaseResults(Mapping):
@@ -92,6 +94,247 @@ def _build_nodes_members() -> tuple[dict, dict]:
         for e in ops.getEleTags()
     }
     return nodes, members
+
+
+STANDARD_MEMBER_GROUPS = (
+    "edge_beam", "exterior_main_beam_1", "exterior_main_beam_2",
+    "interior_main_beam", "start_edge", "end_edge", "transverse_slab",
+    "shell_slab",
+)
+GIRDER_GROUPS = (
+    "exterior_main_beam_1", "exterior_main_beam_2",
+    "interior_main_beam",
+)
+LONGITUDINAL_GROUPS = ("edge_beam", *GIRDER_GROUPS)
+DIAPHRAGM_GROUPS = ("start_edge", "end_edge")
+TRANSVERSE_GROUPS = (*DIAPHRAGM_GROUPS, "transverse_slab")
+
+
+def _tags_in_groups(groups, names):
+    return {int(tag) for name in names for tag in groups.get(name, ())}
+
+
+def get_member_groups(model=None) -> dict[str, list[int]]:
+    groups = {name: [] for name in STANDARD_MEMBER_GROUPS}
+    if model is None:
+        return groups
+
+    z_groups = getattr(model, 'common_grillage_element_z_group', {})
+    for name in STANDARD_MEMBER_GROUPS:
+        count = 1
+        if name in LONGITUDINAL_GROUPS and z_groups.get(name):
+            count = len(z_groups[name])
+        try:
+            for index in range(count):
+                tags = model.get_element(member=name, options="elements", z_group_num=index)
+                groups[name].extend(int(tag) for tag in tags)
+        except (KeyError, IndexError):
+            continue
+    return groups
+
+
+def classify_members(nodes: dict, members: dict, groups: dict | None = None,
+                     model=None, tol: float = 1e-3) -> dict:
+    """Split element tags by solver group, using geometry for ungrouped elements."""
+    if groups is None:
+        groups = get_member_groups(model)
+
+    valid = set(members)
+    longitudinal = _tags_in_groups(groups, LONGITUDINAL_GROUPS) & valid
+    transverse = _tags_in_groups(groups, TRANSVERSE_GROUPS) & valid
+
+    for tag, ends in members.items():
+        if tag in longitudinal or tag in transverse:
+            continue
+        if len(ends) != 2:
+            continue
+        n1, n2 = ends
+        if n1 not in nodes or n2 not in nodes:
+            continue
+        same_z = abs(nodes[n1][2] - nodes[n2][2]) < tol
+        same_y = abs(nodes[n1][1] - nodes[n2][1]) < tol
+        if same_z and same_y:
+            longitudinal.add(tag)
+        else:
+            transverse.add(tag)
+
+    transverse -= longitudinal
+    return {
+        "longitudinal": sorted(longitudinal),
+        "transverse": sorted(transverse),
+        "groups": groups,
+    }
+
+
+def build_transverse_chains(nodes: dict, members: dict, groups: dict | None = None,
+                            model=None) -> list[list[tuple[int, int, int]]]:
+    """Join transverse elements into chains of (tag, start node, end node)."""
+    tags = classify_members(nodes, members, groups=groups, model=model)["transverse"]
+    neighbours = {}
+    for tag in tags:
+        ends = members[tag]
+        if len(ends) == 2 and all(node in nodes for node in ends):
+            start, end = ends
+            neighbours.setdefault(start, {})[tag] = end
+            neighbours.setdefault(end, {})[tag] = start
+
+    def walk(start):
+        chain = []
+        while neighbours[start]:
+            tag = min(neighbours[start])
+            end = neighbours[start].pop(tag)
+            neighbours[end].pop(tag)
+            chain.append((tag, start, end))
+            start = end
+            if len(neighbours[start]) > 1:
+                break
+        if nodes[chain[0][1]][2] > nodes[chain[-1][2]][2]:
+            chain = [(tag, end, start) for tag, start, end in reversed(chain)]
+        return chain
+
+    chains = []
+    order = sorted(neighbours, key=lambda node: (nodes[node][0], nodes[node][2], node))
+    for start in order:
+        if len(neighbours[start]) == 1:
+            chains.append(walk(start))
+    for start in order:
+        while neighbours[start]:
+            chains.append(walk(start))
+    return chains
+
+
+def plot_geometry(dataset):
+    """Read geometry from the same result dataset as the selected load cases."""
+    if dataset is None or 'node_coordinates' not in dataset or 'ele_nodes' not in dataset:
+        return _build_nodes_members()
+    coordinates = dataset['node_coordinates']
+    connectivity = dataset['ele_nodes']
+    nodes = {int(tag): list(row) for tag, row in zip(coordinates.Node.values, coordinates.values)}
+    members = {int(tag): [int(node) for node in row]
+               for tag, row in zip(connectivity.Element.values, connectivity.values)}
+    return nodes, members
+
+
+def plot_member_groups(dataset):
+    mapping = dataset.attrs.get('member_elements')
+    if mapping is None:
+        return None
+    groups = {}
+    for name, info in json.loads(mapping).items():
+        tags = {int(tag) for subgroup in info['elements'] for tag in subgroup}
+        groups[name] = sorted(tags)
+    return groups
+
+
+def _transverse_member_tags(groups, members):
+    """Find diaphragm and bracing elements between girders."""
+    longitudinal = _tags_in_groups(groups, LONGITUDINAL_GROUPS)
+    girder_nodes = set()
+    for tag in _tags_in_groups(groups, GIRDER_GROUPS):
+        girder_nodes.update(members.get(tag, ()))
+
+    transverse = set()
+    for tag in _tags_in_groups(groups, TRANSVERSE_GROUPS) - longitudinal:
+        ends = members.get(tag, ())
+        if len(ends) == 2 and (not girder_nodes or girder_nodes.issuperset(ends)):
+            transverse.add(tag)
+    return transverse
+
+
+def attach_transverse_forces(dataset, model):
+    """Save local end forces before OpenSees records are cleared."""
+    import numpy as np
+    import xarray as xr
+
+    groups = plot_member_groups(dataset)
+    if groups is None:
+        groups = get_member_groups(model)
+    _, members = plot_geometry(dataset)
+    tags = sorted(_transverse_member_tags(groups, members) & set(dataset.Element.values))
+    results = model.results
+    components = results.force_component
+    records = dict(results.basic_load_case_record)
+    for increments in results.moving_load_case_record:
+        records.update(increments)
+
+    values = np.full((dataset.sizes['Loadcase'], len(tags), len(components)), np.nan)
+    for case_index, name in enumerate(dataset.Loadcase.values):
+        record = records.get(name)
+        if record is None:
+            continue
+        forces_by_tag = record[1]
+        for element_index, tag in enumerate(tags):
+            forces = forces_by_tag.get(tag)
+            if forces is not None and len(forces) == len(components):
+                values[case_index, element_index] = forces
+    dataset['transverse_local_forces'] = xr.DataArray(
+        values, dims=('Loadcase', 'TransverseElement', 'Component'),
+        coords={'Loadcase': dataset.Loadcase, 'TransverseElement': tags, 'Component': components},
+    )
+    return dataset
+
+
+def transverse_series(dataset, nodes, members, components, *, displacement=False):
+    """Return connected transverse traces with original solver end/node values."""
+    import numpy as np
+
+    groups = plot_member_groups(dataset)
+    plotted = members
+    if groups is not None:
+        tags = _transverse_member_tags(groups, members)
+        plotted = {tag: members[tag] for tag in tags}
+    chains = build_transverse_chains(nodes, plotted, groups=groups)
+    chains.sort(key=lambda chain: sum(nodes[end][0] for _, _, end in chain) / len(chain))
+
+    if displacement:
+        data = dataset.get('displacements')
+        id_dimension = 'Node'
+    elif 'transverse_local_forces' in dataset:
+        data = dataset['transverse_local_forces']
+        id_dimension = 'TransverseElement'
+    else:
+        data = dataset.get('forces')
+        id_dimension = 'Element'
+    if data is None:
+        return
+    by_id = {int(tag): index for index, tag in enumerate(data[id_dimension].values)}
+    by_component = {str(name).lower(): index for index, name in enumerate(data.Component.values)}
+    values = np.asarray(data.transpose(id_dimension, 'Component').values, dtype=float)
+
+    def value(tag, component):
+        index = by_id.get(tag)
+        column = by_component.get(component.lower())
+        if index is None or column is None:
+            return np.nan
+        return float(values[index, column])
+
+    end_tags = _tags_in_groups(groups or {}, DIAPHRAGM_GROUPS)
+    counts = {'ED': 0, 'CB': 0, 'T': 0}
+    for chain in chains:
+        if groups is None:
+            prefix = 'T'
+        elif all(tag in end_tags for tag, _, _ in chain):
+            prefix = 'ED'
+        else:
+            prefix = 'CB'
+        counts[prefix] += 1
+        if displacement:
+            node_ids = [chain[0][1]] + [end for _, _, end in chain]
+            component, = components
+            factor = 1000 if component == 'x' else -1000
+            samples = [value(node, component) * factor for node in node_ids]
+        else:
+            node_ids, samples = [], []
+            for tag, start, end in chain:
+                node_ids.extend((start, end))
+                comp_i, comp_j = components
+                if members[tag][0] != start:
+                    comp_i, comp_j = comp_j, comp_i
+                samples.extend((value(tag, comp_i) / 1000, value(tag, comp_j) / 1000))
+        if np.any(np.isfinite(samples)):
+            label = f'{prefix}{counts[prefix]}'
+            points = np.array([nodes[node] for node in node_ids])
+            yield label, points, np.asarray(samples)
 
 
 def dump_full_data(
@@ -387,19 +630,7 @@ def _build_full_data(model, edge_dist: float = 0.0, dataset=None, lazy: bool = F
     nodes, members = _build_nodes_members()
 
     # Extract standard member groups via ospgrillage get_element API
-    standard_groups = [
-        "edge_beam", "exterior_main_beam_1", "exterior_main_beam_2",
-        "interior_main_beam", "start_edge", "end_edge", "transverse_slab",
-        "shell_slab"
-    ]
-    groups = {}
-    for group_name in standard_groups:
-        try:
-            # get_element returns list of tags
-            groups[group_name] = [int(e) for e in model.get_element(
-                member=group_name, options="elements")]
-        except Exception:
-            groups[group_name] = []
+    groups = get_member_groups(model)
 
     # Coordinate components
     ds0 = ds_all.isel(Loadcase=0)
@@ -408,18 +639,9 @@ def _build_full_data(model, edge_dist: float = 0.0, dataset=None, lazy: bool = F
     disp_components = [str(
         c) for c in ds0["displacements"].coords["Component"].values] if "displacements" in ds0.data_vars else []
 
-    # Classify members: longitudinal = both nodes share same Z and same Y
-    _z_tol = 1e-3
-    longitudinal_members = []
-    transverse_members = []
-    for tag, (n1, n2) in members.items():
-        if n1 not in nodes or n2 not in nodes:
-            continue
-        if (abs(nodes[n1][2] - nodes[n2][2]) < _z_tol and
-                abs(nodes[n1][1] - nodes[n2][1]) < _z_tol):
-            longitudinal_members.append(tag)
-        else:
-            transverse_members.append(tag)
+    member_classes = classify_members(nodes, members, groups=groups)
+    longitudinal_members = member_classes["longitudinal"]
+    transverse_members = member_classes["transverse"]
 
     data: dict = {
         "nodes": {str(k): list(v) for k, v in nodes.items()},

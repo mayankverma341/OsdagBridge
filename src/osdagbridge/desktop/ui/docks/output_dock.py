@@ -39,7 +39,7 @@ from osdagbridge.core.utils.common import (
     KEY_UTIL_LONG_TRANS_SHEAR, KEY_UTIL_FATIGUE, KEY_UTIL_STRESS_LIMITATION,
     KEY_UTIL_DEFLECTION_CRACK, KEY_ANALYSIS_LOAD_COMBINATION,
     KEY_OUTPUT_DOCK_MEMBER_ID, KEY_OUTPUT_DOCK_LOAD_COMBINATION,
-    KEY_TS_NO_OF_GIRDERS,
+    KEY_TS_NO_OF_GIRDERS, VALUE_TRANSVERSE_MEMBERS,
 )
 from osdagbridge.desktop.ui.utils.custom_buttons import DockCustomButton
 from osdagbridge.desktop.ui.docks.dock_utils import apply_field_style
@@ -864,6 +864,7 @@ class OutputDock(QWidget):
             combo_analysis.blockSignals(True)
             combo_analysis.clear()
             combo_analysis.addItems(["All"] + items)
+            combo_analysis.addItem(VALUE_TRANSVERSE_MEMBERS)
             combo_analysis.setCurrentIndex(0)
             combo_analysis.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo_analysis.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)

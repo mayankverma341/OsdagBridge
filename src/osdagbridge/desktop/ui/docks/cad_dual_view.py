@@ -5,7 +5,7 @@ Author: Arushi
 """
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QScrollArea, QHBoxLayout, QPushButton, QLabel
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal
 from .cad_cross_section import CrossSectionCADWidget
 from .cad_top_view import TopViewCADWidget
 from osdagbridge.core.utils.common import *
@@ -17,6 +17,8 @@ from osdagbridge.desktop.cad.irc5_geometry import (
 
 class BridgeDualCADWidget(QWidget):
     """Split view widget showing both cross-section and top view with individual controls"""
+
+    cad_parameter_edit_requested = Signal(str, float)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,6 +64,13 @@ class BridgeDualCADWidget(QWidget):
         # Create top view scroll area
         self.top_view_widget = TopViewCADWidget(self)
         # self.top_view_widget.setMinimumSize(800, 600)
+
+        self.cross_section_widget.cad_parameter_edit_requested.connect(
+            self.cad_parameter_edit_requested
+        )
+        self.top_view_widget.cad_parameter_edit_requested.connect(
+            self.cad_parameter_edit_requested
+        )
         
         self.top_scroll = QScrollArea()
         self.top_scroll.setWidget(self.top_view_widget)
@@ -147,13 +156,22 @@ class BridgeDualCADWidget(QWidget):
         )
         self.top_view_widget.update()
     
-    def update_from_osdag_inputs(self, input_dict):
+    def set_editing_enabled(self, enabled: bool):
+        for view in (self.cross_section_widget, self.top_view_widget):
+            editor = view._cad_inline_editor
+            editor.enabled = enabled
+            if not enabled:
+                editor.finish(commit=False)
+
+    def update_from_osdag_inputs(self, input_dict, force=False):
         """
         Update CAD from OsdagBridge input fields
         Maps from OsdagBridge common.py KEY_* fields to CAD widget parameters
         
         Args:
             input_dict: Dictionary with keys from common.py (e.g., KEY_SPAN, KEY_CARRIAGEWAY_WIDTH)
+            force: Re-render all mapped parameters even when values are unchanged
+                   (used after an inline CAD edit is committed).
         """
         
         params = {}
@@ -322,10 +340,12 @@ class BridgeDualCADWidget(QWidget):
                             params[KEY_MD_HEIGHT] = geom["barrier_height"]
         
         # Propagate only keys that actually changed to avoid unnecessary redraw/zoom resets.
-        changed_params = {
-            k: v for k, v in params.items()
-            if self._last_mapped_params.get(k) != v
-        }
+        changed_params = (
+            dict(params) if force else {
+                k: v for k, v in params.items()
+                if self._last_mapped_params.get(k) != v
+            }
+        )
         if not changed_params:
             return
 

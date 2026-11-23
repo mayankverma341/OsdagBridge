@@ -132,6 +132,7 @@ KEY_SECTION_OUTPUT_STEELDESIGN = "section.output.superstructure.steeldesign"
 
 # ── Output field keys ─────────────────────────────────────────────────────────
 KEY_ANALYSIS_MEMBER           = "analysis.member"
+VALUE_TRANSVERSE_MEMBERS      = "Transverse Members"
 KEY_ANALYSIS_LOAD_COMBINATION = "analysis.load_combination"
 KEY_ANALYSIS_FORCES           = "analysis.forces"
 KEY_ANALYSIS_DISPLAY_OPTIONS  = "analysis.display_options"
@@ -465,6 +466,39 @@ KEY_TS_NO_OF_FOOTPATHS    = "typical_section.no_of_footpaths"
 KEY_TS_FOOTPATH_WIDTH     = "typical_section.footpath_width"
 KEY_TS_FOOTPATH_THICKNESS = "typical_section.footpath_thickness"
 KEY_TS_CAD_PREVIEW        = "typical_section.cad_preview"
+
+KEY_CAD_EDIT_CARRIAGEWAY_WIDTH = "cad.edit.carriageway_width"
+KEY_CAD_EDIT_GIRDER_SPACING   = "cad.edit.girder_spacing"
+KEY_CAD_EDIT_DECK_THICKNESS   = "cad.edit.deck_thickness"
+KEY_CAD_EDIT_SPAN_LENGTH      = "cad.edit.span_length"
+
+# Convert CAD millimetres to the units used in the input fields.
+CAD_EDITABLE_PARAMETERS = {
+    KEY_CAD_EDIT_CARRIAGEWAY_WIDTH: {
+        "key": KEY_CARRIAGEWAY_WIDTH,
+        "label": "Carriageway Width",
+        "cad_param": "carriageway_width",
+        "display_divisor": 1000.0,
+    },
+    KEY_CAD_EDIT_GIRDER_SPACING: {
+        "key": KEY_TS_GIRDER_SPACING,
+        "label": "Girder Spacing",
+        "cad_param": "girder_spacing",
+        "display_divisor": 1000.0,
+    },
+    KEY_CAD_EDIT_DECK_THICKNESS: {
+        "key": KEY_TS_DECK_THICKNESS,
+        "label": "Deck Thickness",
+        "cad_param": "deck_thickness",
+        "display_divisor": 1.0,
+    },
+    KEY_CAD_EDIT_SPAN_LENGTH: {
+        "key": KEY_SPAN,
+        "label": "Span Length",
+        "cad_param": "span_length",
+        "display_divisor": 1000.0,
+    },
+}
 
 # Typical Section - Lane Deatils
 KEY_WC_LD_TAB = "typical_section.lane_details.tab"
@@ -1486,6 +1520,110 @@ FOOTWAY_LOADS = {
     "Crowded Footway": 500,
 }
 KEY_TERRAIN_TYPE = ["plain", "obstructed"]
+
+VALUE_CUSTOM = "Custom"
+MSG_CUSTOM_VALUE_EMPTY = "Error: The custom value for '{parameter}' cannot be empty."
+MSG_UNSAVED_CHANGES = (
+    "You have unsaved changes. Closing this window will discard them. "
+    "Do you want to proceed?"
+)
+
+CUSTOM_INPUT_GROUPS = (
+    {"mode_key": KEY_LL_FOOTPATH_PRESSURE_MODE,
+     "value_keys": (KEY_LL_FOOTPATH_PRESSURE_VALUE,)},
+    {"mode_key": KEY_SL_DEAD_LOAD_MODE,
+     "value_keys": (KEY_SL_DEAD_LOAD_VALUE,)},
+    {"mode_key": KEY_SL_LIVE_LOAD_MODE,
+     "value_keys": (KEY_SL_LIVE_LOAD_VALUE,)},
+    {"mode_key": KEY_WL_GUST_FACTOR_MODE,
+     "value_keys": (KEY_WL_GUST_FACTOR_VALUE,)},
+    {"mode_key": KEY_WL_DRAG_COEFF_MODE,
+     "value_keys": (KEY_WL_DRAG_COEFF_VALUE,)},
+    {"mode_key": KEY_WL_DRAG_COEFF_LL_MODE,
+     "value_keys": (KEY_WL_DRAG_COEFF_LL_VALUE,)},
+    {"mode_key": KEY_WL_LIFT_COEFF_MODE,
+     "value_keys": (KEY_WL_LIFT_COEFF_VALUE,)},
+    {"mode_key": KEY_WL_SUPER_AREA_ELEV_MODE,
+     "value_keys": (KEY_WL_SUPER_AREA_ELEV_VALUE,)},
+    {"mode_key": KEY_WL_SUPER_AREA_PLAIN_MODE,
+     "value_keys": (KEY_WL_SUPER_AREA_PLAIN_VALUE,)},
+    {"mode_key": KEY_WL_EXPOSED_FRONTAL_MODE,
+     "value_keys": (KEY_WL_EXPOSED_FRONTAL_VALUE,)},
+    {"mode_key": KEY_WL_WIND_ECC_DECK_MODE,
+     "value_keys": (KEY_WL_WIND_ECC_DECK_VALUE,)},
+    {"mode_key": KEY_WL_WIND_LL_ECC_MODE,
+     "value_keys": (KEY_WL_WIND_LL_ECC_VALUE,)},
+    {"mode_key": KEY_DO_CAMBER_MODE,
+     "value_keys": (KEY_DO_CAMBER_VALUE,)},
+    {"mode_key": KEY_CB_TYPE,
+     "value_keys": (KEY_CB_DENSITY, KEY_CB_WIDTH, KEY_CB_HEIGHT,
+                    KEY_CB_AREA, KEY_CB_LOAD)},
+    {"mode_key": KEY_MD_TYPE,
+     "value_keys": (KEY_MD_DENSITY, KEY_MD_WIDTH, KEY_MD_HEIGHT,
+                    KEY_MD_AREA, KEY_MD_LOAD)},
+    {"mode_key": KEY_RL_TYPE,
+     "value_keys": (KEY_RL_WIDTH, KEY_RL_HEIGHT)},
+    {"mode_key": KEY_RL_LOAD_MODE,
+     "value_keys": (KEY_RL_LOAD_VALUE,)},
+    {"mode_key": KEY_WC_MATERIAL,
+     "value_keys": (KEY_WC_DENSITY,)},
+)
+
+CUSTOM_GIRDER_TEXT_KEYS = (
+    KEY_MP_GIRDER_DEPTH, KEY_MP_GIRDER_TOP_FLANGE_WIDTH,
+    KEY_MP_GIRDER_BOTTOM_FLANGE_WIDTH,
+)
+
+PARAMETER_DISPLAY_NAMES = {
+    KEY_MP_GIRDER_DEPTH: "Girder Total Depth",
+    KEY_MP_GIRDER_TOP_FLANGE_WIDTH: "Girder Top Flange Width",
+    KEY_MP_GIRDER_BOTTOM_FLANGE_WIDTH: "Girder Bottom Flange Width",
+    KEY_LL_FOOTPATH_PRESSURE_MODE: "Footpath Pressure",
+    KEY_LL_FOOTPATH_PRESSURE_VALUE: "Footpath Pressure",
+    KEY_SL_DEAD_LOAD_MODE: "Dead Load for Seismic Force",
+    KEY_SL_DEAD_LOAD_VALUE: "Dead Load for Seismic Force",
+    KEY_SL_LIVE_LOAD_MODE: "Live Load for Seismic Force",
+    KEY_SL_LIVE_LOAD_VALUE: "Live Load for Seismic Force",
+    KEY_WL_GUST_FACTOR_MODE: "Gust Factor, G",
+    KEY_WL_GUST_FACTOR_VALUE: "Gust Factor, G",
+    KEY_WL_DRAG_COEFF_MODE: "Drag Coefficient, C_D",
+    KEY_WL_DRAG_COEFF_VALUE: "Drag Coefficient, C_D",
+    KEY_WL_DRAG_COEFF_LL_MODE: "Drag Coefficient against Live Load, C_DLL",
+    KEY_WL_DRAG_COEFF_LL_VALUE: "Drag Coefficient against Live Load, C_DLL",
+    KEY_WL_LIFT_COEFF_MODE: "Lift Coefficient, C_L",
+    KEY_WL_LIFT_COEFF_VALUE: "Lift Coefficient, C_L",
+    KEY_WL_SUPER_AREA_ELEV_MODE: "Superstructure Area in Elevation, A1",
+    KEY_WL_SUPER_AREA_ELEV_VALUE: "Superstructure Area in Elevation, A1",
+    KEY_WL_SUPER_AREA_PLAIN_MODE: "Superstructure Area in Plain, A3",
+    KEY_WL_SUPER_AREA_PLAIN_VALUE: "Superstructure Area in Plain, A3",
+    KEY_WL_EXPOSED_FRONTAL_MODE: "Exposed Frontal Area of Live Load, A1LL",
+    KEY_WL_EXPOSED_FRONTAL_VALUE: "Exposed Frontal Area of Live Load, A1LL",
+    KEY_WL_WIND_ECC_DECK_MODE: "Wind Load Eccentricity from Top of Deck",
+    KEY_WL_WIND_ECC_DECK_VALUE: "Wind Load Eccentricity from Top of Deck",
+    KEY_WL_WIND_LL_ECC_MODE: "Wind on Live Load Eccentricity from Top of Deck",
+    KEY_WL_WIND_LL_ECC_VALUE: "Wind on Live Load Eccentricity from Top of Deck",
+    KEY_DO_CAMBER_MODE: "Camber",
+    KEY_DO_CAMBER_VALUE: "Camber",
+    KEY_CB_TYPE: "Crash Barrier Type",
+    KEY_CB_DENSITY: "Crash Barrier Material Density",
+    KEY_CB_WIDTH: "Crash Barrier Width",
+    KEY_CB_HEIGHT: "Crash Barrier Height",
+    KEY_CB_AREA: "Crash Barrier Area",
+    KEY_CB_LOAD: "Crash Barrier Load",
+    KEY_MD_TYPE: "Median Type",
+    KEY_MD_DENSITY: "Median Material Density",
+    KEY_MD_WIDTH: "Median Width",
+    KEY_MD_HEIGHT: "Median Height",
+    KEY_MD_AREA: "Median Area",
+    KEY_MD_LOAD: "Median Load",
+    KEY_RL_TYPE: "Railing Type",
+    KEY_RL_WIDTH: "Railing Width",
+    KEY_RL_HEIGHT: "Railing Height",
+    KEY_RL_LOAD_MODE: "Railing Load Mode",
+    KEY_RL_LOAD_VALUE: "Railing Load",
+    KEY_WC_MATERIAL: "Wearing Course Material",
+    KEY_WC_DENSITY: "Wearing Course Density",
+}
 
 from pathlib import Path
 import sqlite3
